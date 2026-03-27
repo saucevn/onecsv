@@ -1,33 +1,33 @@
 "use client";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import UploadCard from "@/components/UploadCard";
 import PreviewTable from "@/components/PreviewTable";
 import SqlOutput from "@/components/SqlOutput";
+import { processFileClientSide } from "@/lib/client-etl";
 import type { UploadResult } from "@/types/etl";
 import type { UnifiedRow } from "@/lib/types";
 
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
-
 function firstOfMonth() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-/** Tạo CSV string client-side — không cần server, không timeout */
+/** Tạo CSV string client-side — instant, không giới hạn */
 function recordsToCSV(records: UnifiedRow[]): string {
   if (!records.length) return "";
-  const BOM = "\uFEFF";
+  const BOM     = "\uFEFF";
   const headers = Object.keys(records[0]);
   const escape  = (v: unknown) => {
     const s = v === null || v === undefined ? "" : String(v);
-    // Wrap trong quotes nếu có dấu phẩy, xuống dòng hoặc quotes
     return s.includes(",") || s.includes("\n") || s.includes('"')
-      ? `"${s.replace(/"/g, '""')}"`
-      : s;
+      ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const rows = records.map((r) => headers.map((h) => escape(r[h as keyof UnifiedRow])).join(","));
+  const rows = records.map((r) =>
+    headers.map((h) => escape(r[h as keyof UnifiedRow])).join(",")
+  );
   return BOM + [headers.join(","), ...rows].join("\n");
 }
 
@@ -41,45 +41,64 @@ function filterByDate(records: UnifiedRow[], from: string, to: string): UnifiedR
   });
 }
 
+type ProcessingState = {
+  source:   string;
+  step:     "reading" | "parsing" | "transforming" | "done";
+  progress: number; // 0–100
+};
+
+const STEP_LABEL: Record<ProcessingState["step"], string> = {
+  reading:      "Đang đọc file...",
+  parsing:      "Đang parse Excel...",
+  transforming: "Đang chuẩn hóa...",
+  done:         "Hoàn tất",
+};
+
 export default function ETLPage() {
-  const [results, setResults]     = useState<UploadResult[]>([]);
-  const [loading, setLoading]     = useState<string | null>(null);
-  const [sqlOutput, setSqlOutput] = useState("");
-  const [exporting, setExporting] = useState(false);
-  const [dateFrom, setDateFrom]   = useState(firstOfMonth());
-  const [dateTo,   setDateTo]     = useState(today());
+  const [results, setResults]       = useState<UploadResult[]>([]);
+  const [processing, setProcessing] = useState<ProcessingState | null>(null);
+  const [sqlOutput, setSqlOutput]   = useState("");
+  const [sqlLoading, setSqlLoading] = useState(false);
+  const [dateFrom, setDateFrom]     = useState(firstOfMonth());
+  const [dateTo,   setDateTo]       = useState(today());
 
   const allRecords: UnifiedRow[] = results.flatMap((r) => r.preview as UnifiedRow[]);
   const allErrors  = results.flatMap((r) => r.errors.map((e) => `[${r.source}] ${e}`));
   const filtered   = filterByDate(allRecords, dateFrom, dateTo);
   const isFiltered = filtered.length < allRecords.length;
 
-  async function handleUpload(source: string, file: File) {
-    setLoading(source);
-    const form = new FormData();
-    form.append("file", file);
-    form.append("source", source);
-    form.append("date_from", dateFrom);
-    form.append("date_to",   dateTo);
+  const handleUpload = useCallback(async (source: string, file: File) => {
+    // Progress animation
+    const tick = (step: ProcessingState["step"], progress: number) =>
+      setProcessing({ source, step, progress });
+
+    tick("reading", 10);
+    await new Promise((r) => setTimeout(r, 50)); // allow UI to repaint
+
+    tick("parsing", 35);
+    await new Promise((r) => setTimeout(r, 50));
+
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error ?? res.statusText);
-      }
-      const data = await res.json();
+      tick("transforming", 70);
+      const result = await processFileClientSide(
+        file,
+        source as "shopee" | "tiktok" | "pos_cake",
+        { dateFrom, dateTo }
+      );
+      tick("done", 100);
+      await new Promise((r) => setTimeout(r, 300));
+
       setResults((prev) => [
         ...prev.filter((r) => r.source !== source),
-        { source, filename: file.name, rows: data.rows, errors: data.errors, preview: data.preview },
+        { source, filename: file.name, ...result },
       ]);
     } catch (e: unknown) {
-      alert("Lỗi: " + (e instanceof Error ? e.message : String(e)));
+      alert("Lỗi xử lý file: " + (e instanceof Error ? e.message : String(e)));
     } finally {
-      setLoading(null);
+      setProcessing(null);
     }
-  }
+  }, [dateFrom, dateTo]);
 
-  // ✅ Export CSV hoàn toàn client-side — instant, không cần server
   function handleExportCSV() {
     if (!filtered.length) return;
     const csv  = recordsToCSV(filtered);
@@ -92,29 +111,31 @@ export default function ETLPage() {
     URL.revokeObjectURL(url);
   }
 
-  // SQL vẫn dùng server (logic phức tạp hơn)
   async function handleExportSQL() {
     if (!filtered.length) return;
-    setExporting(true);
+    setSqlLoading(true);
     try {
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ records: filtered, format: "sql" }),
+        body: JSON.stringify({ records: filtered.slice(0, 5000), format: "sql" }),
+        // SQL giới hạn 5K dòng để tránh timeout — đủ cho dev/test
       });
-      if (!res.ok) throw new Error(await res.text());
       const { sql } = await res.json();
       setSqlOutput(sql);
     } catch (e: unknown) {
-      alert("Lỗi xuất SQL: " + (e instanceof Error ? e.message : String(e)));
+      alert("Lỗi: " + (e instanceof Error ? e.message : String(e)));
     } finally {
-      setExporting(false);
+      setSqlLoading(false);
     }
   }
+
+  const isProcessing = processing !== null;
 
   return (
     <div className="space-y-8">
 
+      {/* Header */}
       <div>
         <div className="flex items-center gap-2 mb-1">
           <span className="bg-blue-600 text-white text-xs font-bold px-2 py-0.5 rounded-md">1CSV</span>
@@ -143,11 +164,32 @@ export default function ETLPage() {
               icon={src.icon}
               color={src.color}
               result={results.find((r) => r.source === src.id)}
-              loading={loading === src.id}
+              loading={processing?.source === src.id}
               onUpload={handleUpload}
             />
           ))}
         </div>
+
+        {/* Progress bar */}
+        {processing && (
+          <div className="mt-4 bg-white border border-gray-200 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-gray-600 font-medium">
+                {STEP_LABEL[processing.step]}
+              </span>
+              <span className="text-xs text-gray-400">{processing.progress}%</span>
+            </div>
+            <div className="w-full bg-gray-100 rounded-full h-2">
+              <div
+                className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${processing.progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              Xử lý hoàn toàn trong browser — không gửi dữ liệu lên server
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Warnings */}
@@ -198,7 +240,7 @@ export default function ETLPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 mt-3">
+              <div className="flex flex-wrap gap-2 mt-3 items-center">
                 {results.map((r) => {
                   const n = filterByDate(r.preview as UnifiedRow[], dateFrom, dateTo).length;
                   return (
@@ -208,7 +250,7 @@ export default function ETLPage() {
                   );
                 })}
                 {results.some((r) => r.source === "pos_cake") && (
-                  <span className="text-xs text-gray-400 italic py-1">
+                  <span className="text-xs text-gray-400 italic">
                     * POS Cake: ngày được gán theo khoảng đã chọn
                   </span>
                 )}
@@ -217,10 +259,10 @@ export default function ETLPage() {
 
             <div className="border-t border-gray-100" />
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 items-center">
               <button
                 onClick={handleExportCSV}
-                disabled={filtered.length === 0}
+                disabled={filtered.length === 0 || isProcessing}
                 className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -229,23 +271,31 @@ export default function ETLPage() {
                 Tải 1 file CSV
                 {isFiltered && <span className="opacity-70 text-xs">({filtered.length.toLocaleString()})</span>}
               </button>
+
               <button
                 onClick={handleExportSQL}
-                disabled={exporting || filtered.length === 0}
+                disabled={sqlLoading || filtered.length === 0 || isProcessing}
                 className="flex items-center gap-2 px-5 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:border-gray-400 disabled:opacity-50 transition"
               >
-                {exporting ? (
-                  <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-                  </svg>
-                ) : (
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                  </svg>
-                )}
+                {sqlLoading
+                  ? <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
+                  : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+                }
                 Xuất SQL
               </button>
+
+              {/* Capacity indicator */}
+              {allRecords.length > 0 && (
+                <span className={`ml-auto text-xs px-3 py-1.5 rounded-lg font-medium ${
+                  allRecords.length > 30000 ? "bg-orange-50 text-orange-600 border border-orange-100"
+                  : allRecords.length > 10000 ? "bg-yellow-50 text-yellow-600 border border-yellow-100"
+                  : "bg-green-50 text-green-600 border border-green-100"
+                }`}>
+                  {allRecords.length > 30000 ? "⚡ File lớn — xử lý tốt" :
+                   allRecords.length > 10000 ? "📊 Dữ liệu nhiều" : "✓ Bình thường"}
+                  {" · "}{allRecords.length.toLocaleString()} dòng
+                </span>
+              )}
             </div>
           </div>
         </div>
