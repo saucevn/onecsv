@@ -1,7 +1,13 @@
 {
-  "name": "ladospice",
-  "version": "0.1.0",
+  "name": "onecsv",
+  "version": "1.0.0",
+  "description": "Đồng nhất dữ liệu bán hàng đa kênh về 1 file CSV duy nhất",
   "private": true,
+  "homepage": "https://onecsv-app.thichcay.vn",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/saucevn/onecsv"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
