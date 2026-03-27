@@ -10,30 +10,33 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function firstOfMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 export default function ETLPage() {
   const [results, setResults]     = useState<UploadResult[]>([]);
   const [loading, setLoading]     = useState<string | null>(null);
   const [sqlOutput, setSqlOutput] = useState("");
   const [exporting, setExporting] = useState(false);
 
-  // Date range cho POS Cake — đặt ở cấp page, dùng khi export
-  const [dateFrom, setDateFrom] = useState(today());
+  // Date range áp dụng cho toàn bộ file xuất ra
+  const [dateFrom, setDateFrom] = useState(firstOfMonth());
   const [dateTo,   setDateTo]   = useState(today());
 
   const allRecords: UnifiedRow[] = results.flatMap((r) => r.preview as UnifiedRow[]);
   const allErrors  = results.flatMap((r) => r.errors.map((e) => `[${r.source}] ${e}`));
-  const hasPOS     = results.some((r) => r.source === "pos_cake");
 
   async function handleUpload(source: string, file: File) {
     setLoading(source);
     const form = new FormData();
     form.append("file", file);
     form.append("source", source);
-    // Truyền date range cho POS Cake
-    if (source === "pos_cake") {
-      form.append("date_from", dateFrom);
-      form.append("date_to",   dateTo);
-    }
+    // Truyền date range cho POS Cake (để gán timestamp)
+    form.append("date_from", dateFrom);
+    form.append("date_to",   dateTo);
+
     try {
       const res = await fetch("/api/upload", { method: "POST", body: form });
       if (!res.ok) {
@@ -55,16 +58,18 @@ export default function ETLPage() {
   async function handleExportCSV() {
     setExporting(true);
     try {
+      // Lọc theo date range trước khi export
+      const filtered = filterByDate(allRecords, dateFrom, dateTo);
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ records: allRecords, format: "csv" }),
+        body: JSON.stringify({ records: filtered, format: "csv" }),
       });
       const blob = await res.blob();
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
       a.href = url;
-      a.download = `onecvs_${dateFrom}_${dateTo}.csv`;
+      a.download = `onecsv_${dateFrom}_${dateTo}.csv`;
       a.click();
     } finally {
       setExporting(false);
@@ -74,10 +79,11 @@ export default function ETLPage() {
   async function handleExportSQL() {
     setExporting(true);
     try {
+      const filtered = filterByDate(allRecords, dateFrom, dateTo);
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ records: allRecords, format: "sql" }),
+        body: JSON.stringify({ records: filtered, format: "sql" }),
       });
       const { sql } = await res.json();
       setSqlOutput(sql);
@@ -86,8 +92,19 @@ export default function ETLPage() {
     }
   }
 
-  // Re-process POS Cake khi đổi ngày (nếu đã upload)
-  const posResult = results.find((r) => r.source === "pos_cake");
+  // Lọc records theo khoảng ngày (bỏ qua POS Cake vì không có ngày gốc)
+  function filterByDate(records: UnifiedRow[], from: string, to: string): UnifiedRow[] {
+    const f = new Date(from + "T00:00:00");
+    const t = new Date(to   + "T23:59:59");
+    return records.filter((r) => {
+      if (!r.order_date) return true; // POS Cake không có ngày → giữ lại
+      const d = new Date(r.order_date);
+      return d >= f && d <= t;
+    });
+  }
+
+  const filteredCount = filterByDate(allRecords, dateFrom, dateTo).length;
+  const isFiltered    = filteredCount < allRecords.length;
 
   return (
     <div className="space-y-8">
@@ -136,86 +153,86 @@ export default function ETLPage() {
         </div>
       )}
 
-      {/* Step 2: Export — chỉ hiện khi có data */}
+      {/* Step 2: Export */}
       {allRecords.length > 0 && (
         <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
-            Bước 2 — Xuất file CSV
+            Bước 2 — Chọn khoảng thời gian &amp; Xuất file
           </p>
-          <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+          <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
 
-            {/* Stats row */}
-            <div className="flex items-center gap-6 text-sm">
-              <div>
-                <span className="text-2xl font-bold text-gray-900">{allRecords.length}</span>
-                <span className="text-gray-400 ml-1.5">dòng tổng</span>
+            {/* Date range — áp dụng chung 3 kênh */}
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-3">Khoảng thời gian báo cáo</p>
+              <div className="flex flex-wrap gap-4 items-end">
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Từ ngày</label>
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Đến ngày</label>
+                  <input
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+                  />
+                </div>
+
+                {/* Kết quả filter */}
+                <div className="flex items-center gap-2 text-sm">
+                  {isFiltered ? (
+                    <span className="bg-blue-50 text-blue-700 border border-blue-100 px-3 py-2 rounded-lg font-medium">
+                      {filteredCount.toLocaleString()} / {allRecords.length.toLocaleString()} dòng trong khoảng này
+                    </span>
+                  ) : (
+                    <span className="bg-gray-50 text-gray-500 border border-gray-200 px-3 py-2 rounded-lg">
+                      {allRecords.length.toLocaleString()} dòng tổng
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-2">
-                {results.map((r) => (
-                  <span key={r.source} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-lg">
-                    {r.source === "shopee" ? "📦" : r.source === "tiktok" ? "🎵" : "🧾"} {r.rows} dòng
+
+              {/* Breakdown theo kênh */}
+              <div className="flex gap-2 mt-3">
+                {results.map((r) => {
+                  const channelFiltered = filterByDate(r.preview as UnifiedRow[], dateFrom, dateTo).length;
+                  return (
+                    <span key={r.source} className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-lg">
+                      {r.source === "shopee" ? "📦" : r.source === "tiktok" ? "🎵" : "🧾"}
+                      {" "}{channelFiltered.toLocaleString()} dòng
+                    </span>
+                  );
+                })}
+                {results.some((r) => r.source === "pos_cake") && (
+                  <span className="text-xs text-gray-400 italic py-1">
+                    * POS Cake: ngày được gán theo khoảng đã chọn
                   </span>
-                ))}
+                )}
               </div>
             </div>
 
-            {/* Date range cho POS Cake */}
-            {hasPOS && (
-              <div className="border border-teal-100 bg-teal-50 rounded-xl p-4">
-                <p className="text-xs font-semibold text-teal-700 mb-2.5">
-                  🧾 Khoảng thời gian đơn hàng POS Cake
-                </p>
-                <div className="flex gap-3 items-end">
-                  <div>
-                    <label className="text-xs text-gray-500 block mb-1">Từ ngày</label>
-                    <input
-                      type="date"
-                      value={dateFrom}
-                      onChange={(e) => setDateFrom(e.target.value)}
-                      className="text-sm border border-teal-200 rounded-lg px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-teal-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 block mb-1">Đến ngày</label>
-                    <input
-                      type="date"
-                      value={dateTo}
-                      onChange={(e) => setDateTo(e.target.value)}
-                      className="text-sm border border-teal-200 rounded-lg px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-teal-400"
-                    />
-                  </div>
-                  {posResult && (
-                    <button
-                      onClick={() => {
-                        // Re-fetch POS Cake với date mới — cần trigger upload lại
-                        // Thông báo user cần upload lại file POS
-                        alert("Hãy upload lại file POS Cake để áp dụng khoảng ngày mới.");
-                      }}
-                      className="text-xs px-3 py-1.5 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition"
-                    >
-                      Áp dụng
-                    </button>
-                  )}
-                </div>
-                <p className="text-xs text-teal-500 mt-2">
-                  * Ngày sẽ được gán đều cho {posResult?.rows ?? 0} đơn POS trong khoảng thời gian này
-                </p>
-              </div>
-            )}
+            <div className="border-t border-gray-100" />
 
             {/* Export buttons */}
-            <div className="flex gap-3 pt-1">
+            <div className="flex gap-3">
               <button
-                onClick={handleExportCSV} disabled={exporting}
+                onClick={handleExportCSV} disabled={exporting || filteredCount === 0}
                 className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
                 Tải 1 file CSV
+                {isFiltered && <span className="opacity-70 text-xs">({filteredCount.toLocaleString()})</span>}
               </button>
               <button
-                onClick={handleExportSQL} disabled={exporting}
+                onClick={handleExportSQL} disabled={exporting || filteredCount === 0}
                 className="flex items-center gap-2 px-5 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:border-gray-400 disabled:opacity-50 transition"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -228,8 +245,7 @@ export default function ETLPage() {
         </div>
       )}
 
-      {/* Preview */}
-      {allRecords.length > 0 && <PreviewTable records={allRecords} />}
+      {allRecords.length > 0 && <PreviewTable records={filterByDate(allRecords, dateFrom, dateTo)} />}
       {sqlOutput && <SqlOutput sql={sqlOutput} onClose={() => setSqlOutput("")} />}
     </div>
   );
