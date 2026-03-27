@@ -2,6 +2,8 @@
 import { useRef, useState } from "react";
 import type { UploadResult } from "@/types/etl";
 
+type Extra = Record<string, string>;
+
 type Props = {
   source: string;
   label: string;
@@ -9,7 +11,7 @@ type Props = {
   color: string;
   result?: UploadResult;
   loading: boolean;
-  onUpload: (source: string, file: File, extra?: Record<string, string>) => void;
+  onUpload: (source: string, file: File, extra?: Extra) => void;
 };
 
 const colorMap: Record<string, string> = {
@@ -24,7 +26,6 @@ const badgeMap: Record<string, string> = {
   teal:   "bg-teal-100 text-teal-700",
 };
 
-// Hôm nay dạng yyyy-mm-dd cho default value
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -33,14 +34,17 @@ export default function UploadCard({
   source, label, icon, color, result, loading, onUpload,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
-  // Date range chỉ hiện với POS Cake
   const [dateFrom, setDateFrom] = useState(today());
   const [dateTo,   setDateTo]   = useState(today());
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const extra = source === "pos_cake" ? { date_from: dateFrom, date_to: dateTo } : {};
+    // Fix TypeScript: explicit Extra type, không dùng ternary với {}
+    const extra: Extra | undefined =
+      source === "pos_cake"
+        ? { date_from: dateFrom, date_to: dateTo }
+        : undefined;
     onUpload(source, file, extra);
     e.target.value = "";
   }
@@ -49,8 +53,7 @@ export default function UploadCard({
 
   return (
     <div
-      className={`border-2 border-dashed rounded-xl p-5 transition-all ${colorMap[color] ?? colorMap.orange}
-        ${isPOS ? "cursor-default" : "cursor-pointer"}`}
+      className={`border-2 border-dashed rounded-xl p-5 transition-all ${colorMap[color] ?? colorMap.orange} ${isPOS ? "cursor-default" : "cursor-pointer"}`}
       onClick={isPOS ? undefined : () => inputRef.current?.click()}
     >
       <input
@@ -71,10 +74,7 @@ export default function UploadCard({
 
       {/* Date picker — chỉ POS Cake */}
       {isPOS && (
-        <div
-          className="mb-3 space-y-1.5"
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className="mb-3 space-y-1.5" onClick={(e) => e.stopPropagation()}>
           <p className="text-xs text-gray-500 font-medium">Khoảng thời gian đơn hàng</p>
           <div className="flex gap-2 items-center">
             <div className="flex-1">
@@ -96,13 +96,11 @@ export default function UploadCard({
               />
             </div>
           </div>
-          <p className="text-xs text-gray-400">
-            * Ngày sẽ được gán đều cho tất cả đơn trong file
-          </p>
+          <p className="text-xs text-gray-400">* Ngày sẽ được gán đều cho tất cả đơn trong file</p>
         </div>
       )}
 
-      {/* Status area */}
+      {/* Status */}
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-gray-500">
           <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
@@ -123,10 +121,7 @@ export default function UploadCard({
           </button>
         </div>
       ) : (
-        <button
-          onClick={() => inputRef.current?.click()}
-          className={`w-full text-left ${isPOS ? "" : ""}`}
-        >
+        <button onClick={() => inputRef.current?.click()} className="w-full text-left">
           <p className="text-sm text-gray-600 font-medium">Chọn file CSV / Excel</p>
           <p className="text-xs text-gray-400 mt-1">Bấm để mở file browser</p>
         </button>
