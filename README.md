@@ -2,8 +2,10 @@
 
 **Đồng nhất dữ liệu bán hàng đa kênh về 1 file CSV duy nhất**
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/saucevn/onecsv)
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-onecsv--app.thichcay.vn-blue)](https://onecsv-app.thichcay.vn)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-onecsv--app.thichcay.vn-blue?style=flat-square)](https://onecsv-app.thichcay.vn)
+[![Deploy with Vercel](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com/new/clone?repository-url=https://github.com/saucevn/onecsv)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js)](https://nextjs.org)
 
 ---
 
@@ -21,8 +23,6 @@ Bạn đang bán hàng trên nhiều kênh và mỗi tuần phải tốn hàng g
 ---
 
 ## Demo
-
-![One CSV Screenshot](https://onecsv-app.thichcay.vn/og.png)
 
 🔗 **Live app:** [onecsv-app.thichcay.vn](https://onecsv-app.thichcay.vn)
 
@@ -79,14 +79,14 @@ Không có database. Không có backend server. Mọi thứ chạy trong Next.js
 ## Chạy local
 
 ```bash
-# Clone repo
+# 1. Clone repo
 git clone https://github.com/saucevn/onecsv.git
 cd onecsv
 
-# Cài dependencies
+# 2. Cài dependencies
 npm install
 
-# Chạy dev server
+# 3. Chạy dev server
 npm run dev
 ```
 
@@ -156,34 +156,102 @@ Sau đó đăng ký trong `app/api/upload/route.ts`:
 import { mapTenNenTang } from "@/lib/mappers/ten-nen-tang";
 
 const MAPPERS = {
-  shopee:        mapShopee,
-  tiktok:        mapTiktok,
-  pos_cake:      mapPosCake,
-  ten_nen_tang:  mapTenNenTang,  // ← thêm vào đây
+  shopee:       mapShopee,
+  tiktok:       mapTiktok,
+  pos_cake:     mapPosCake,
+  ten_nen_tang: mapTenNenTang, // ← thêm vào đây
 };
 ```
 
 ---
 
-## Deploy lên Vercel
+## Deploy & Publish
 
-```bash
-# Cài Vercel CLI
-npm i -g vercel
+### Cách 1 — Deploy lên Vercel (khuyến nghị)
 
-# Deploy
-vercel --prod
+**Bước 1:** Fork repo về GitHub account của bạn
+
+**Bước 2:** Vào [vercel.com](https://vercel.com) → **Add New Project** → Import repo vừa fork
+
+**Bước 3:** Vercel tự detect Next.js, nhấn **Deploy** — xong trong ~1 phút
+
+**Bước 4 (tuỳ chọn):** Gán custom domain tại **Project Settings → Domains**
+
+```
+Không cần cấu hình gì thêm.
+Không cần environment variables.
+Mỗi lần push lên GitHub → Vercel tự deploy lại.
 ```
 
-Hoặc bấm nút bên dưới:
+Hoặc 1-click:
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/saucevn/onecsv)
 
 ---
 
+### Cách 2 — Tự host (VPS / Docker)
+
+```bash
+# Build production
+npm run build
+
+# Chạy production server
+npm start
+# → App chạy tại http://localhost:3000
+```
+
+Dùng Nginx reverse proxy để expose ra internet:
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+---
+
+### Cách 3 — Publish lần đầu từ local (Vercel CLI)
+
+```bash
+# Cài Vercel CLI
+npm i -g vercel
+
+# Login
+vercel login
+
+# Deploy preview (test trước)
+vercel
+
+# Deploy production
+vercel --prod
+```
+
+---
+
+### Checklist trước khi publish
+
+- [ ] Chạy `npm run build` local không có lỗi
+- [ ] Test upload cả 3 file mẫu (Shopee / TikTok / POS Cake)
+- [ ] Kiểm tra file CSV xuất ra mở đúng trong Excel
+- [ ] Đổi link GitHub trong `README.md` và `app/page.tsx` về repo của bạn
+- [ ] Thêm custom domain trên Vercel (nếu có)
+- [ ] Đặt repo visibility = **Public** trên GitHub để nhận Star ⭐
+
+---
+
 ## Roadmap
 
-- [ ] Kết nối trực tiếp Google Sheets API để đẩy data lên Sheets
+- [ ] Kết nối trực tiếp Google Sheets API
 - [ ] Tích hợp BigQuery connector cho Looker Studio
 - [ ] Hỗ trợ thêm nền tảng: Lazada, Tiki, Grab Food
 - [ ] Lưu lịch sử upload và so sánh theo tháng
@@ -191,6 +259,20 @@ Hoặc bấm nút bên dưới:
 
 ---
 
+## Contributing
+
+Pull requests are welcome. Để thêm hỗ trợ nền tảng mới, xem hướng dẫn [Mở rộng](#mở-rộng--thêm-nguồn-dữ-liệu-mới) ở trên.
+
+1. Fork repo
+2. Tạo branch: `git checkout -b feature/lazada-mapper`
+3. Commit: `git commit -m 'feat: add Lazada mapper'`
+4. Push: `git push origin feature/lazada-mapper`
+5. Mở Pull Request
+
+---
+
 ## License
 
-MIT © [Thích Cay](https://thichcay.vn)
+MIT © 2026 [Thích Cay](https://thichcay.vn) — xem file [LICENSE](./LICENSE) để biết thêm chi tiết.
+
+Bạn được tự do sử dụng, sửa đổi và phân phối lại dự án này cho mục đích cá nhân hoặc thương mại, miễn là giữ nguyên copyright notice.
