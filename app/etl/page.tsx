@@ -4,6 +4,7 @@ import UploadCard from "@/components/UploadCard";
 import PreviewTable from "@/components/PreviewTable";
 import SqlOutput from "@/components/SqlOutput";
 import { processFileClientSide } from "@/lib/client-etl";
+import { generateSQL, downloadSQL } from "@/lib/sql-generator";
 import type { UploadResult } from "@/types/etl";
 import type { UnifiedRow } from "@/lib/types";
 
@@ -15,7 +16,6 @@ function firstOfMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-/** Tạo CSV string client-side — instant, không giới hạn */
 function recordsToCSV(records: UnifiedRow[]): string {
   if (!records.length) return "";
   const BOM     = "\uFEFF";
@@ -44,13 +44,13 @@ function filterByDate(records: UnifiedRow[], from: string, to: string): UnifiedR
 type ProcessingState = {
   source:   string;
   step:     "reading" | "parsing" | "transforming" | "done";
-  progress: number; // 0–100
+  progress: number;
 };
 
 const STEP_LABEL: Record<ProcessingState["step"], string> = {
   reading:      "Đang đọc file...",
   parsing:      "Đang parse Excel...",
-  transforming: "Đang chuẩn hóa...",
+  transforming: "Đang chuẩn hóa dữ liệu...",
   done:         "Hoàn tất",
 };
 
@@ -58,7 +58,6 @@ export default function ETLPage() {
   const [results, setResults]       = useState<UploadResult[]>([]);
   const [processing, setProcessing] = useState<ProcessingState | null>(null);
   const [sqlOutput, setSqlOutput]   = useState("");
-  const [sqlLoading, setSqlLoading] = useState(false);
   const [dateFrom, setDateFrom]     = useState(firstOfMonth());
   const [dateTo,   setDateTo]       = useState(today());
 
@@ -68,26 +67,23 @@ export default function ETLPage() {
   const isFiltered = filtered.length < allRecords.length;
 
   const handleUpload = useCallback(async (source: string, file: File) => {
-    // Progress animation
     const tick = (step: ProcessingState["step"], progress: number) =>
       setProcessing({ source, step, progress });
 
-    tick("reading", 10);
-    await new Promise((r) => setTimeout(r, 50)); // allow UI to repaint
-
-    tick("parsing", 35);
+    tick("reading", 15);
+    await new Promise((r) => setTimeout(r, 50));
+    tick("parsing", 40);
     await new Promise((r) => setTimeout(r, 50));
 
     try {
-      tick("transforming", 70);
+      tick("transforming", 75);
       const result = await processFileClientSide(
         file,
         source as "shopee" | "tiktok" | "pos_cake",
         { dateFrom, dateTo }
       );
       tick("done", 100);
-      await new Promise((r) => setTimeout(r, 300));
-
+      await new Promise((r) => setTimeout(r, 400));
       setResults((prev) => [
         ...prev.filter((r) => r.source !== source),
         { source, filename: file.name, ...result },
@@ -99,6 +95,7 @@ export default function ETLPage() {
     }
   }, [dateFrom, dateTo]);
 
+  // ✅ CSV — client-side, instant
   function handleExportCSV() {
     if (!filtered.length) return;
     const csv  = recordsToCSV(filtered);
@@ -111,23 +108,15 @@ export default function ETLPage() {
     URL.revokeObjectURL(url);
   }
 
-  async function handleExportSQL() {
+  // ✅ SQL — client-side, không gọi server
+  function handleExportSQL() {
     if (!filtered.length) return;
-    setSqlLoading(true);
-    try {
-      const res = await fetch("/api/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ records: filtered.slice(0, 5000), format: "sql" }),
-        // SQL giới hạn 5K dòng để tránh timeout — đủ cho dev/test
-      });
-      const { sql } = await res.json();
-      setSqlOutput(sql);
-    } catch (e: unknown) {
-      alert("Lỗi: " + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setSqlLoading(false);
-    }
+    const sql = generateSQL(filtered);
+    setSqlOutput(sql);
+  }
+
+  function handleDownloadSQL() {
+    downloadSQL(filtered, `onecsv_${dateFrom}_${dateTo}.sql`);
   }
 
   const isProcessing = processing !== null;
@@ -186,7 +175,7 @@ export default function ETLPage() {
               />
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              Xử lý hoàn toàn trong browser — không gửi dữ liệu lên server
+              Xử lý hoàn toàn trong browser — dữ liệu không rời khỏi máy bạn
             </p>
           </div>
         )}
@@ -208,6 +197,7 @@ export default function ETLPage() {
           </p>
           <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
 
+            {/* Date range */}
             <div>
               <p className="text-sm font-medium text-gray-700 mb-3">Khoảng thời gian báo cáo</p>
               <div className="flex flex-wrap gap-4 items-end">
@@ -259,7 +249,8 @@ export default function ETLPage() {
 
             <div className="border-t border-gray-100" />
 
-            <div className="flex gap-3 items-center">
+            {/* Export buttons */}
+            <div className="flex flex-wrap gap-3 items-center">
               <button
                 onClick={handleExportCSV}
                 disabled={filtered.length === 0 || isProcessing}
@@ -268,32 +259,30 @@ export default function ETLPage() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-                Tải 1 file CSV
+                Tải CSV
                 {isFiltered && <span className="opacity-70 text-xs">({filtered.length.toLocaleString()})</span>}
               </button>
 
               <button
                 onClick={handleExportSQL}
-                disabled={sqlLoading || filtered.length === 0 || isProcessing}
+                disabled={filtered.length === 0 || isProcessing}
                 className="flex items-center gap-2 px-5 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:border-gray-400 disabled:opacity-50 transition"
               >
-                {sqlLoading
-                  ? <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
-                  : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
-                }
-                Xuất SQL
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                </svg>
+                Xem SQL
               </button>
 
-              {/* Capacity indicator */}
+              {/* Capacity badge */}
               {allRecords.length > 0 && (
                 <span className={`ml-auto text-xs px-3 py-1.5 rounded-lg font-medium ${
                   allRecords.length > 30000 ? "bg-orange-50 text-orange-600 border border-orange-100"
                   : allRecords.length > 10000 ? "bg-yellow-50 text-yellow-600 border border-yellow-100"
                   : "bg-green-50 text-green-600 border border-green-100"
                 }`}>
-                  {allRecords.length > 30000 ? "⚡ File lớn — xử lý tốt" :
-                   allRecords.length > 10000 ? "📊 Dữ liệu nhiều" : "✓ Bình thường"}
-                  {" · "}{allRecords.length.toLocaleString()} dòng
+                  {allRecords.length > 30000 ? "⚡" : allRecords.length > 10000 ? "📊" : "✓"}
+                  {" "}{allRecords.length.toLocaleString()} dòng đã xử lý
                 </span>
               )}
             </div>
@@ -302,7 +291,15 @@ export default function ETLPage() {
       )}
 
       {allRecords.length > 0 && <PreviewTable records={filtered} />}
-      {sqlOutput && <SqlOutput sql={sqlOutput} onClose={() => setSqlOutput("")} />}
+
+      {sqlOutput && (
+        <SqlOutput
+          sql={sqlOutput}
+          rows={filtered.length}
+          onClose={() => setSqlOutput("")}
+          onDownload={handleDownloadSQL}
+        />
+      )}
     </div>
   );
 }
