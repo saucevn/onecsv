@@ -273,6 +273,6 @@ Pull requests are welcome. Để thêm hỗ trợ nền tảng mới, xem hướ
 
 ## License
 
-MIT © 2026 [Thích Cay](https://thichcay.vn) — xem file [LICENSE](./LICENSE) để biết thêm chi tiết.
+MIT © 2026 [CodeSauce](https://github.com/saucevn) — xem file [LICENSE](./LICENSE) để biết thêm chi tiết.
 
 Bạn được tự do sử dụng, sửa đổi và phân phối lại dự án này cho mục đích cá nhân hoặc thương mại, miễn là giữ nguyên copyright notice.
