@@ -1,74 +1,58 @@
-import type { UnifiedRow } from "@/lib/types";
+import type { CanonicalRow } from "@/lib/types/canonical";
+import { CANONICAL_COLS } from "@/lib/types/canonical";
 
 const TABLE = "unified_orders";
 
-/** Tạo SQL DDL + INSERT hoàn toàn client-side — không giới hạn dòng */
-export function generateSQL(records: UnifiedRow[]): string {
+const COL_TYPES: Partial<Record<keyof CanonicalRow, string>> = {
+  ordered_at: "TIMESTAMP", paid_at: "TIMESTAMP", shipped_at: "TIMESTAMP",
+  in_transit_at: "TIMESTAMP", delivered_at: "TIMESTAMP", cancelled_at: "TIMESTAMP",
+  quantity: "INTEGER", return_quantity: "INTEGER",
+  buyer_paid_total: "NUMERIC(18,2)", shipping_fee: "NUMERIC(18,2)",
+  shipping_fee_original: "NUMERIC(18,2)", unit_original_price: "NUMERIC(18,2)",
+  unit_sale_price: "NUMERIC(18,2)", discount_amount: "NUMERIC(18,2)",
+  gross_revenue: "NUMERIC(18,2)", platform_fee: "NUMERIC(18,2)",
+  net_revenue: "NUMERIC(18,2)",
+};
+
+export function generateSQL(records: CanonicalRow[]): string {
   if (!records.length) return "-- Không có dữ liệu";
 
-  // DDL
+  const colDefs = CANONICAL_COLS.map(
+    (col) => `  ${col} ${COL_TYPES[col] ?? "TEXT"}`
+  );
+
   const ddl = `-- ============================================================
--- One CSV — Unified Orders
+-- One CSV v2 — Unified Orders
 -- Generated: ${new Date().toISOString().slice(0, 19).replace("T", " ")}
--- Rows: ${records.length.toLocaleString()}
+-- Rows: ${records.length.toLocaleString()} | Columns: ${CANONICAL_COLS.length}
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS ${TABLE} (
-  order_id       TEXT,
-  order_date     TIMESTAMP,
-  channel        TEXT,
-  sku            TEXT,
-  product_name   TEXT,
-  quantity       INTEGER,
-  unit_price     NUMERIC(18,2),
-  gross_revenue  NUMERIC(18,2),
-  platform_fee   NUMERIC(18,2),
-  net_revenue    NUMERIC(18,2),
-  currency       TEXT,
-  customer_name  TEXT,
-  customer_phone TEXT,
-  status         TEXT,
-  payment_method TEXT
+${colDefs.join(",\n")}
 );\n\n`;
 
-  // INSERT theo batch 500 dòng để dễ chạy
-  const BATCH = 500;
-  const cols  = "order_id, order_date, channel, sku, product_name, quantity, unit_price, gross_revenue, platform_fee, net_revenue, currency, customer_name, customer_phone, status, payment_method";
-
-  const escapeVal = (v: unknown): string => {
+  const esc = (v: unknown): string => {
     if (v === null || v === undefined || v === "") return "NULL";
     if (typeof v === "number") return isNaN(v) ? "NULL" : String(v);
     return `'${String(v).replace(/'/g, "''")}'`;
   };
 
+  const colsStr = CANONICAL_COLS.join(", ");
+  const BATCH   = 500;
   const batches: string[] = [];
+
   for (let i = 0; i < records.length; i += BATCH) {
-    const chunk = records.slice(i, i + BATCH);
-    const values = chunk.map((r) => `  (${[
-      escapeVal(r.order_id),
-      escapeVal(r.order_date),
-      escapeVal(r.channel),
-      escapeVal(r.sku),
-      escapeVal(r.product_name),
-      escapeVal(r.quantity),
-      escapeVal(r.unit_price),
-      escapeVal(r.gross_revenue),
-      escapeVal(r.platform_fee),
-      escapeVal(r.net_revenue),
-      escapeVal(r.currency),
-      escapeVal(r.customer_name),
-      escapeVal(r.customer_phone),
-      escapeVal(r.status),
-      escapeVal(r.payment_method),
-    ].join(", ")})`);
-    batches.push(`INSERT INTO ${TABLE} (${cols})\nVALUES\n${values.join(",\n")};`);
+    const chunk  = records.slice(i, i + BATCH);
+    const values = chunk.map(
+      (r) => `  (${CANONICAL_COLS.map((col) => esc(r[col])).join(", ")})`
+    );
+    batches.push(`INSERT INTO ${TABLE} (${colsStr})\nVALUES\n${values.join(",\n")};`);
   }
 
   return ddl + batches.join("\n\n");
 }
 
-/** Tải SQL xuống dưới dạng file .sql */
-export function downloadSQL(records: UnifiedRow[], filename: string) {
+export function downloadSQL(records: CanonicalRow[], filename: string) {
   const sql  = generateSQL(records);
   const blob = new Blob([sql], { type: "text/plain;charset=utf-8;" });
   const url  = URL.createObjectURL(blob);

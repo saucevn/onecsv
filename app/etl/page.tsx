@@ -5,8 +5,8 @@ import PreviewTable from "@/components/PreviewTable";
 import SqlOutput from "@/components/SqlOutput";
 import { processFileClientSide } from "@/lib/client-etl";
 import { generateSQL, downloadSQL } from "@/lib/sql-generator";
-import type { UploadResult } from "@/types/etl";
-import type { UnifiedRow } from "@/lib/types";
+import type { CanonicalRow } from "@/lib/types/canonical";
+import { CANONICAL_COLS } from "@/lib/types/canonical";
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -16,30 +16,37 @@ function firstOfMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function recordsToCSV(records: UnifiedRow[]): string {
+function recordsToCSV(records: CanonicalRow[]): string {
   if (!records.length) return "";
-  const BOM     = "\uFEFF";
-  const headers = Object.keys(records[0]);
-  const escape  = (v: unknown) => {
+  const BOM    = "\uFEFF";
+  const escape = (v: unknown) => {
     const s = v === null || v === undefined ? "" : String(v);
     return s.includes(",") || s.includes("\n") || s.includes('"')
       ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const rows = records.map((r) =>
-    headers.map((h) => escape(r[h as keyof UnifiedRow])).join(",")
+    CANONICAL_COLS.map((col) => escape(r[col])).join(",")
   );
-  return BOM + [headers.join(","), ...rows].join("\n");
+  return BOM + [CANONICAL_COLS.join(","), ...rows].join("\n");
 }
 
-function filterByDate(records: UnifiedRow[], from: string, to: string): UnifiedRow[] {
+function filterByDate(records: CanonicalRow[], from: string, to: string): CanonicalRow[] {
   const f = new Date(from + "T00:00:00");
   const t = new Date(to   + "T23:59:59");
   return records.filter((r) => {
-    if (!r.order_date) return true;
-    const d = new Date(r.order_date);
+    if (!r.ordered_at) return true; // POS Cake — giữ lại
+    const d = new Date(r.ordered_at);
     return d >= f && d <= t;
   });
 }
+
+type UploadResult = {
+  source:   string;
+  filename: string;
+  rows:     number;
+  errors:   string[];
+  preview:  CanonicalRow[];
+};
 
 type ProcessingState = {
   source:   string;
@@ -61,10 +68,11 @@ export default function ETLPage() {
   const [dateFrom, setDateFrom]     = useState(firstOfMonth());
   const [dateTo,   setDateTo]       = useState(today());
 
-  const allRecords: UnifiedRow[] = results.flatMap((r) => r.preview as UnifiedRow[]);
-  const allErrors  = results.flatMap((r) => r.errors.map((e) => `[${r.source}] ${e}`));
-  const filtered   = filterByDate(allRecords, dateFrom, dateTo);
-  const isFiltered = filtered.length < allRecords.length;
+  const allRecords   = results.flatMap((r) => r.preview);
+  const allErrors    = results.flatMap((r) => r.errors.map((e) => `[${r.source}] ${e}`));
+  const filtered     = filterByDate(allRecords, dateFrom, dateTo);
+  const isFiltered   = filtered.length < allRecords.length;
+  const isProcessing = processing !== null;
 
   const handleUpload = useCallback(async (source: string, file: File) => {
     const tick = (step: ProcessingState["step"], progress: number) =>
@@ -95,7 +103,6 @@ export default function ETLPage() {
     }
   }, [dateFrom, dateTo]);
 
-  // ✅ CSV — client-side, instant
   function handleExportCSV() {
     if (!filtered.length) return;
     const csv  = recordsToCSV(filtered);
@@ -108,18 +115,14 @@ export default function ETLPage() {
     URL.revokeObjectURL(url);
   }
 
-  // ✅ SQL — client-side, không gọi server
   function handleExportSQL() {
     if (!filtered.length) return;
-    const sql = generateSQL(filtered);
-    setSqlOutput(sql);
+    setSqlOutput(generateSQL(filtered));
   }
 
   function handleDownloadSQL() {
     downloadSQL(filtered, `onecsv_${dateFrom}_${dateTo}.sql`);
   }
-
-  const isProcessing = processing !== null;
 
   return (
     <div className="space-y-8">
@@ -129,9 +132,10 @@ export default function ETLPage() {
         <div className="flex items-center gap-2 mb-1">
           <span className="bg-blue-600 text-white text-xs font-bold px-2 py-0.5 rounded-md">1CSV</span>
           <h1 className="text-2xl font-bold text-gray-900">Gộp dữ liệu bán hàng</h1>
+          <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-md font-mono ml-1">v2</span>
         </div>
         <p className="text-gray-400 text-sm">
-          Upload file từ mỗi kênh → hệ thống tự động chuẩn hóa và gộp về 1 file CSV duy nhất.
+          Upload file từ mỗi kênh → chuẩn hóa về {CANONICAL_COLS.length} cột canonical → xuất 1 file CSV.
         </p>
       </div>
 
@@ -159,24 +163,18 @@ export default function ETLPage() {
           ))}
         </div>
 
-        {/* Progress bar */}
+        {/* Progress */}
         {processing && (
           <div className="mt-4 bg-white border border-gray-200 rounded-xl p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-gray-600 font-medium">
-                {STEP_LABEL[processing.step]}
-              </span>
+              <span className="text-sm text-gray-600 font-medium">{STEP_LABEL[processing.step]}</span>
               <span className="text-xs text-gray-400">{processing.progress}%</span>
             </div>
             <div className="w-full bg-gray-100 rounded-full h-2">
-              <div
-                className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${processing.progress}%` }}
-              />
+              <div className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                   style={{ width: `${processing.progress}%` }} />
             </div>
-            <p className="text-xs text-gray-400 mt-2">
-              Xử lý hoàn toàn trong browser — dữ liệu không rời khỏi máy bạn
-            </p>
+            <p className="text-xs text-gray-400 mt-2">Xử lý trong browser — dữ liệu không rời khỏi máy bạn</p>
           </div>
         )}
       </div>
@@ -197,25 +195,18 @@ export default function ETLPage() {
           </p>
           <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
 
-            {/* Date range */}
             <div>
               <p className="text-sm font-medium text-gray-700 mb-3">Khoảng thời gian báo cáo</p>
               <div className="flex flex-wrap gap-4 items-end">
                 <div>
                   <label className="text-xs text-gray-400 block mb-1">Từ ngày</label>
-                  <input
-                    type="date" value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:border-blue-400"
-                  />
+                  <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+                    className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:border-blue-400" />
                 </div>
                 <div>
                   <label className="text-xs text-gray-400 block mb-1">Đến ngày</label>
-                  <input
-                    type="date" value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:border-blue-400"
-                  />
+                  <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+                    className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:border-blue-400" />
                 </div>
                 <div className="text-sm">
                   {isFiltered ? (
@@ -232,7 +223,7 @@ export default function ETLPage() {
 
               <div className="flex flex-wrap gap-2 mt-3 items-center">
                 {results.map((r) => {
-                  const n = filterByDate(r.preview as UnifiedRow[], dateFrom, dateTo).length;
+                  const n = filterByDate(r.preview, dateFrom, dateTo).length;
                   return (
                     <span key={r.source} className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-lg">
                       {r.source === "shopee" ? "📦" : r.source === "tiktok" ? "🎵" : "🧾"} {n.toLocaleString()} dòng
@@ -240,49 +231,38 @@ export default function ETLPage() {
                   );
                 })}
                 {results.some((r) => r.source === "pos_cake") && (
-                  <span className="text-xs text-gray-400 italic">
-                    * POS Cake: ngày được gán theo khoảng đã chọn
-                  </span>
+                  <span className="text-xs text-gray-400 italic">* POS Cake: ngày được gán theo khoảng đã chọn</span>
                 )}
               </div>
             </div>
 
             <div className="border-t border-gray-100" />
 
-            {/* Export buttons */}
             <div className="flex flex-wrap gap-3 items-center">
-              <button
-                onClick={handleExportCSV}
-                disabled={filtered.length === 0 || isProcessing}
-                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition"
-              >
+              <button onClick={handleExportCSV} disabled={!filtered.length || isProcessing}
+                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                 </svg>
-                Tải CSV
+                Tải CSV {CANONICAL_COLS.length} cột
                 {isFiltered && <span className="opacity-70 text-xs">({filtered.length.toLocaleString()})</span>}
               </button>
 
-              <button
-                onClick={handleExportSQL}
-                disabled={filtered.length === 0 || isProcessing}
-                className="flex items-center gap-2 px-5 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:border-gray-400 disabled:opacity-50 transition"
-              >
+              <button onClick={handleExportSQL} disabled={!filtered.length || isProcessing}
+                className="flex items-center gap-2 px-5 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:border-gray-400 disabled:opacity-50 transition">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
                 </svg>
                 Xem SQL
               </button>
 
-              {/* Capacity badge */}
               {allRecords.length > 0 && (
                 <span className={`ml-auto text-xs px-3 py-1.5 rounded-lg font-medium ${
                   allRecords.length > 30000 ? "bg-orange-50 text-orange-600 border border-orange-100"
                   : allRecords.length > 10000 ? "bg-yellow-50 text-yellow-600 border border-yellow-100"
-                  : "bg-green-50 text-green-600 border border-green-100"
-                }`}>
+                  : "bg-green-50 text-green-600 border border-green-100"}`}>
                   {allRecords.length > 30000 ? "⚡" : allRecords.length > 10000 ? "📊" : "✓"}
-                  {" "}{allRecords.length.toLocaleString()} dòng đã xử lý
+                  {" "}{allRecords.length.toLocaleString()} dòng · {CANONICAL_COLS.length} cột
                 </span>
               )}
             </div>
@@ -293,12 +273,9 @@ export default function ETLPage() {
       {allRecords.length > 0 && <PreviewTable records={filtered} />}
 
       {sqlOutput && (
-        <SqlOutput
-          sql={sqlOutput}
-          rows={filtered.length}
+        <SqlOutput sql={sqlOutput} rows={filtered.length}
           onClose={() => setSqlOutput("")}
-          onDownload={handleDownloadSQL}
-        />
+          onDownload={handleDownloadSQL} />
       )}
     </div>
   );
