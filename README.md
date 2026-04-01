@@ -2,7 +2,7 @@
 
 **Đồng nhất dữ liệu bán hàng đa kênh về 1 file CSV duy nhất**
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-onecsv--app.thichcay.vn-blue?style=flat-square)](https://onecsv-lyart.vercel.app)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-OneCSV-blue?style=flat-square)](https://onecsv-lyart.vercel.app)
 [![Deploy with Vercel](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com/new/clone?repository-url=https://github.com/saucevn/onecsv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js)](https://nextjs.org)
